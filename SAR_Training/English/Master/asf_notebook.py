@@ -13,6 +13,7 @@ import zipfile  # for extractall, ZipFile, BadZipFile
 import datetime
 import glob
 import sys
+import urllib
 
 import gdal  # for Open
 import numpy as np
@@ -22,7 +23,13 @@ from IPython.display import clear_output
 
 from asf_hyp3 import API, LoginError  # for get_products, get_subscriptions, login
 
-
+from bokeh.plotting import figure
+from bokeh.tile_providers import get_provider, Vendors, STAMEN_TERRAIN
+from bokeh.models import ColumnDataSource, GMapOptions, BoxSelectTool, HoverTool, CustomJSHover, CustomJS, Rect, Div, ResetTool, MultiPolygons
+from bokeh.client import push_session
+from bokeh.io import curdoc, output_notebook, push_notebook, show
+from bokeh import events
+from bokeh.models.glyphs import Rect
 #######################
 #  Utility Functions  #
 #######################
@@ -552,3 +559,224 @@ def download_hyp3_products(hyp3_api_object: API,
                 else:
                     print(f"{filename} already exists.")
         return subscription_id
+            
+            
+########################################
+#  Bokeh related Functions and Classes #
+########################################
+            
+def remote_jupyter_proxy_url(port):
+    """
+    Callable to configure Bokeh's show method when a proxy must be
+    configured.
+
+    If port is None we're asking about the URL
+    for the origin header.
+    """
+    #base_url = os.environ['EXTERNAL_URL']
+    base_url = 'https://opensarlab.asf.alaska.edu/'
+    host = urllib.parse.urlparse(base_url).netloc
+
+    # If port is None we're asking for the URL origin
+    # so return the public hostname.
+    if port is None:
+        return host
+
+    service_url_path = os.environ['JUPYTERHUB_SERVICE_PREFIX']
+    proxy_url_path = 'proxy/%d' % port
+
+    user_url = urllib.parse.urljoin(base_url, service_url_path)
+    full_url = urllib.parse.urljoin(user_url, proxy_url_path)
+    return full_url
+            
+       
+class AOI:
+    def __init__(self, 
+                 lower_left_coord=[-20037508.342789244, -19971868.880408563], 
+                 upper_right_coord=[20037508.342789244, 19971868.880408563]):
+        
+        e_list = "Passed coordinates must be a list"
+        assert type(lower_left_coord) == list, e_list   
+        assert type(upper_right_coord) == list, e_list
+        
+        e_length = "Error: lower_left_coord must contain one EPSG:3857 coordinate [x, y]"
+        assert len(lower_left_coord) == 2, e_length
+        assert len(upper_right_coord) == 2, e_length
+        
+        e_order = "Error: A lower_left_coord value is greater than an upper_right_coord value."
+        assert lower_left_coord[0] < upper_right_coord[0], e_order
+        assert lower_left_coord[1] < upper_right_coord[1], e_order
+        
+        coord_error = False
+        e_off_planet = "Error: Cannot instantiate AOI class object with invalid EPSG:3857 coordinates."
+        if lower_left_coord[0] < -20037508.342789244 or lower_left_coord[0] > 20037508.342789244:
+            coord_error = True
+        if upper_right_coord[0] < -20037508.342789244 or upper_right_coord[0] > 20037508.342789244:
+            coord_error = True
+        if lower_left_coord[1] < -19971868.880408563 or lower_left_coord[1] > 19971868.880408563:
+            coord_error = True
+        if upper_right_coord[1] < -19971868.880408563 or upper_right_coord[1] > 19971868.880408563:
+            coord_error = True 
+        if coord_error:
+            assert False, e_off_planet
+        
+        self.geom = {}
+        self.tiff_stack_coords = [lower_left_coord, upper_right_coord]
+        self.subset_coords = [[None, None], [None, None]]
+        self.p = None
+        self.sources = {}
+        self.callbacks = {}
+        
+        self.create_sources()
+        self.create_callbacks()
+        
+        
+        
+    def update_subset_bounds(self, attributes=[]):
+        def python_callback(event):
+            self.geom.update(event.__dict__['geometry'])
+            #print(event.__dict__['geometry'])
+            self.subset_coords[0][0] = event.__dict__['geometry']['x0']
+            self.subset_coords[0][1] = event.__dict__['geometry']['y0']
+            self.subset_coords[1][0] = event.__dict__['geometry']['x1']
+            self.subset_coords[1][1] = event.__dict__['geometry']['y1']
+            print("\rAOI.subset_coords: [[%s, %s], [%s, %s]]      " % (self.subset_coords[0][0], 
+                                                                       self.subset_coords[0][1], 
+                                                                       self.subset_coords[1][0], 
+                                                                       self.subset_coords[1][1]), 
+                                                                      end='\r', flush=True
+                 )
+            
+        return python_callback
+    
+    
+    def reset_subset_bounds(self):
+        self.subset_coords = [[None, None], [None, None]]
+      
+    
+    def create_callbacks(self):
+        subset = CustomJS(args=dict(source=self.sources['subset']), code="""
+            // get data source from Callback args
+            var data = source.data;
+
+            /// get BoxSelectTool dimensions from cb_data parameter of Callback
+            var geometry = cb_data['geometry'];
+
+            var x0 = geometry['x0'];
+            var y0 = geometry['y0'];
+            var x1 = geometry['x1'];
+            var y1 = geometry['y1'];
+            var xxs = [[[x0, x0, x1, x1]]];
+            var yys = [[[y0, y1, y1, y0]]];
+
+            /// update data source with new Rect attributes
+            data['xs'].pop();
+            data['ys'].pop();
+            data['xs'].push(xxs);
+            data['ys'].push(yys);
+
+            // emit update of data source
+            source.change.emit();
+        """)
+        
+        latitude = CustomJSHover(code="""
+                        var projections = require("core/util/projections");
+                        var x = special_vars.x
+                        var y = special_vars.y
+                        var coords = projections.wgs84_mercator.inverse([x, y])
+                        return "" + coords[1].toFixed(6)
+                    """)
+        
+        longitude = CustomJSHover(code="""
+                        var projections = require("core/util/projections");
+                        var x = special_vars.x
+                        var y = special_vars.y
+                        var coords = projections.wgs84_mercator.inverse([x, y])
+                        return "" + coords[0].toFixed(6)
+                    """)    
+
+        self.callbacks.update([('subset', subset), 
+                               ('latitude', latitude), 
+                               ('longitude', longitude)])
+
+
+    def create_sources(self):
+        empty = np.array([np.linspace(0, 0, 2)]*2) #the empty image data to which the HoverTool is attached
+
+        lx = -20037508.342789244 #min web mercator lat
+        ly = -19971868.880408563 #min web mercator long
+        # stretch empty image across world map so lat, long hover still works if user zooms out of AOI
+        hover_img = dict(image=[empty],
+                    x=[lx],
+                    y=[ly],
+                    dw=[int(lx*-2)],
+                    dh=[int(ly*-2)])
+
+        subset = ColumnDataSource(data=dict(xs=[], ys=[]))
+            
+        self.sources.update([('hover', hover_img), 
+                               ('subset', subset)])
+    
+    
+    def build_plot(self, doc):
+        tile_provider = get_provider(Vendors.STAMEN_TERRAIN)
+        box_select = BoxSelectTool(callback=self.callbacks['subset'])
+            
+        self.p = figure(title="Use The Square Selection Tool To Select An Area Of Interest",
+                   x_range=(self.tiff_stack_coords[0][0]-10000, self.tiff_stack_coords[1][0]+10000), 
+                   y_range=(self.tiff_stack_coords[0][1]-10000, self.tiff_stack_coords[1][1]+10000),
+                   x_axis_type="mercator", 
+                   y_axis_type="mercator",
+                   tools=['reset', box_select, 'pan', 'wheel_zoom', 'crosshair'])
+
+        
+        hover_img = self.p.image(source=self.sources['hover'], 
+                                 image='image', 
+                                 x='x', y='y', 
+                                 dw='dw', dh='dh', 
+                                 alpha=0.0)
+
+        self.p.add_tools(HoverTool(
+            renderers=[hover_img],
+            tooltips=[
+                ( 'Long',  '@x{custom}'),
+                ( 'Lat',   '@y{custom}'  )],
+            formatters=dict(
+                y=self.callbacks['latitude'],
+                x=self.callbacks['longitude'])
+        ))
+
+        self.p.add_tile(STAMEN_TERRAIN)
+
+        x1 = self.tiff_stack_coords[0][0]
+        x2 = self.tiff_stack_coords[1][0]
+        y1 = self.tiff_stack_coords[0][1]
+        y2 = self.tiff_stack_coords[1][1]
+        self.p.multi_polygons(xs=[[[[x1, x1, x2, x2]]]],
+                             ys=[[[[y1, y2, y2, y1]]]],
+                             line_width=1.5, line_color='black',
+                             fill_color=None)
+
+        self.p.js_on_event(events.Reset, self.reset_subset_bounds())
+        self.p.on_event(events.SelectionGeometry, 
+                        self.update_subset_bounds(attributes=['geometry'])
+                       )
+        
+        subset = MultiPolygons(xs='xs', ys='ys',
+                               fill_alpha=0.15, fill_color='#336699',
+                               line_dash='dashed'
+                              )
+
+        glyph = self.p.add_glyph(self.sources['subset'], 
+                                 subset, 
+                                 selection_glyph=subset, 
+                                 nonselection_glyph=subset)
+        
+        doc.add_root(self.p)
+        
+    def display_AOI(self):        
+        #output_notebook()
+        show(self.build_plot, notebook_url=remote_jupyter_proxy_url)
+        print("Selected bounding box coords stored in AOI.subset_coords")
+        print("[[lower_left_x, lower_left_y], [upper_right_x, upper_right_y]]\n")
+  
