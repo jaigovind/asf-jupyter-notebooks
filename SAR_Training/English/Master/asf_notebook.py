@@ -5,31 +5,37 @@
 
 
 import os  # for chdir, getcwd, path.exists
+import wget
 import re
 import time  # for perf_counter
 import requests  # for post, get
 from getpass import getpass  # used to input URS creds and add to .netrc
 import zipfile  # for extractall, ZipFile, BadZipFile
-import datetime
+from datetime import datetime, date
 import glob
 import sys
 import urllib
+from subprocess import call, PIPE
 
 import gdal  # for Open
 import numpy as np
+import pandas as pd
 
 from IPython.utils.text import SList
 from IPython.display import clear_output
+import ipywidgets as widgets
 
 from asf_hyp3 import API, LoginError  # for get_products, get_subscriptions, login
 
 from bokeh.plotting import figure
-from bokeh.tile_providers import get_provider, Vendors, STAMEN_TERRAIN
+from bokeh.tile_providers import get_provider, Vendors
 from bokeh.models import ColumnDataSource, GMapOptions, BoxSelectTool, HoverTool, CustomJSHover, CustomJS, Rect, Div, ResetTool, MultiPolygons
 from bokeh.client import push_session
 from bokeh.io import curdoc, output_notebook, push_notebook, show
 from bokeh import events
 from bokeh.models.glyphs import Rect
+
+
 #######################
 #  Utility Functions  #
 #######################
@@ -64,14 +70,14 @@ def new_directory(path: str):
     if not os.path.exists(path):
         print(f"Failed to create path!")
 
-
+"""
 
 def download(filename: str, request: requests.models.Response):
-    """
+    '''
     Takes a filename and get or post request, then downloads the file
     while outputting a download status bar.
     Preconditions: filename must be valid
-    """
+    '''
     assert type(filename) == str, 'Error: filename must be a string'
     assert type(request) == requests.models.Response, 'Error: request must be a class<requests.models.Response>'
     
@@ -80,6 +86,7 @@ def download(filename: str, request: requests.models.Response):
         if request is None:
             f.write(request.content)
         else:
+            print(request.headers)
             total_length = int(request.headers.get('content-length'))
             dl = 0
             for chunk in request.iter_content(chunk_size=1024*1024):
@@ -93,7 +100,7 @@ def download(filename: str, request: requests.models.Response):
                     bps = dl//(time.perf_counter() - start)
                     percent = int((100*dl)/total_length)
                     print(f"\r[{stars}{spaces}] {bps} bps, {percent}%    ", end='\r', flush=True)
-                
+"""                
 
 def asf_unzip(output_dir: str, file_path: str):
     """
@@ -264,7 +271,7 @@ def download_ASF_granule(granule_name: str, processing_level: str) -> str:
 
 def get_hyp3_subscriptions(hyp3_api_object: API) -> dict:
     """
-    Takes a Hyp3 API object and returns a list of enabled associated subscriptions
+    Takes a Hyp3 API object and returns a list of associated, enabled subscriptions
     Returns None if there are no enabled subscriptions associated with Hyp3 account.
     precondition: must already be logged into hyp3
     """
@@ -276,9 +283,12 @@ def get_hyp3_subscriptions(hyp3_api_object: API) -> dict:
     else:
         if not subscriptions:
             print("There are no subscriptions associated with this Hyp3 account.")
-        return subscriptions
-
-
+        else:
+            subs = []
+            for sub in subscriptions:
+                subs.append(f"{sub['id']}: {sub['name']}")
+        return subs
+                            
 
 def pick_hyp3_subscription(subscriptions: list) -> int:
     """
@@ -291,6 +301,7 @@ def pick_hyp3_subscription(subscriptions: list) -> int:
     
     possible_ids = []
     for subscription in subscriptions:
+        print(subscriptions)
         print(
             f"\nSubscription id: {subscription['id']} {subscription['name']}")
         possible_ids.append(subscription['id'])
@@ -305,6 +316,81 @@ def pick_hyp3_subscription(subscriptions: list) -> int:
         else:
             print("\nInvalid ID")
 
+def get_subscription_products_info(subscription_id: int, api_object: API) -> list:
+    products = []
+    page_count = 0
+    while True:
+        product_page = api_object.get_products(
+            sub_id=subscription_id, page=page_count, page_size=100)
+        page_count += 1
+        if not product_page:
+            break
+        for product in product_page:
+            products.append(product)
+    return products        
+ 
+def get_product_info(products_info: list, date_range: list) -> dict:
+    paths = []
+    directions = []
+    urls = []
+    vertex_API_URL = "https://api.daac.asf.alaska.edu/services/search/param"
+    for p_info in products_info:
+        dt = p_info['name'].split('_')[4].split('T')[0]
+        if date(int(dt[:4]), int(dt[4:6]), int(dt[-2:])) >= date_range[0]:
+            if date(int(dt[:4]), int(dt[4:6]), int(dt[-2:])) <= date_range[1]:
+                granule_name = p_info['name'].split('-')[0]
+                parameters = [('granule_list', granule_name), ('output', 'json')]
+                try:
+                    response = requests.post(
+                        vertex_API_URL,
+                        params=parameters,
+                        stream=True
+                    )
+                except requests.exceptions.RequestException as e:
+                    print(e)
+                    sys.exit(1)               
+                json_response = None
+                if response.json()[0]:
+                    json_response = response.json()[0][0]
+                paths.append(json_response['track'])
+                directions.append(json_response['flightDirection'])
+                urls.append(p_info['url'])
+    return {'paths': paths, 'directions': directions, 'urls': urls}           
+                        
+def get_products_dates(products_info: list) -> list:
+    dates = []
+    for info in products_info:
+        dates.append(info['name'].split('_')[4].split('T')[0])
+    return dates  
+            
+def gui_date_picker(dates: list) -> widgets.SelectionRangeSlider:  
+    start_date = datetime.strptime(min(dates), '%Y%m%d')
+    end_date = datetime.strptime(max(dates), '%Y%m%d')
+    date_range = pd.date_range(start_date, end_date, freq='D')
+    options = [(date.strftime(' %m/%d/%Y '), date) for date in date_range]
+    index = (0, len(options)-1)
+    
+    selection_range_slider = widgets.SelectionRangeSlider(
+    options = options,
+    index = index,
+    description = 'Dates',
+    orientation = 'horizontal',
+    layout = {'width': '500px'})
+    return(selection_range_slider)  
+            
+            
+            
+def get_slider_vals(selection_range_slider: widgets.SelectionRangeSlider) -> list:
+    '''Returns the minimum and maximum dates retrieved from the
+    interactive time slider.
+    
+    Parameters:
+    - selection_range_slider: Handle of the interactive time slider
+    '''
+    [a,b] = list(selection_range_slider.value)
+    slider_min = a.to_pydatetime()
+    slider_max = b.to_pydatetime()
+    return[slider_min, slider_max]        
                     
 def polarization_exists(paths: str):
     """
@@ -366,7 +452,7 @@ def select_RTC_polarization(process_type: int, base_path: str) -> str:
     else:
         print(f"Error: found no available polarizations.")      
 
-                    
+'''                    
 def date_range_valid(start_date: datetime.date = None, end_date: datetime.date = None) -> bool:
     """
     Takes a start and end date. 
@@ -383,7 +469,7 @@ def date_range_valid(start_date: datetime.date = None, end_date: datetime.date =
         print("Error: The start date must be prior to the end date.")
     else:                
         return True
-                                              
+'''                                              
                         
 def get_aquisition_date_from_product_name(product_info: dict) -> datetime.date:
     """
@@ -403,164 +489,82 @@ def get_aquisition_date_from_product_name(product_info: dict) -> datetime.date:
     else:                    
         d = split_name[4]
         return datetime.date(int(d[0:4]), int(d[4:6]), int(d[6:8]))
-                        
-                        
-def filter_date_range(product_list: list, start_date: datetime.date, end_date: datetime.date) -> list:
-    """
-    Takes a product list and date range.
-    Returns filtered list of product info dictionaries falling inside date range.
-    Preconditions: - product_list must be a list of dictionaries containing product info, as returned from the
-                     hyp3_API get_products() function.
-                   - start_date and end_date must be datetime.date objects
-    """
-    assert type(product_list) == list, 'Error: product_list must be a list of product_info dictionaries.'
-    assert len(product_list) > 0, 'Error: product_list must contain at least one product_info dictionary.'
-    for info_dict in product_list:
-        assert type(info_dict) == dict, 'Error: product_list must be a list of product info dictionaries.'
-               
-    filtered_products = []                    
-    for product in product_list:
-        date = get_aquisition_date_from_product_name(product)
-        if date >= start_date and date < end_date:
-            filtered_products.append(product)
-    return filtered_products
-                       
-                        
-def flight_direction_valid(flight_direction: str = None) -> bool:
-    """
-    Takes a flight direction (or None)
-    Returns False if flight direction is not a valid Vertex API flight direction key value
-    else returns True
-    """
-    assert type(flight_direction) == str, 'Error: flight_direction must be a string.'
-    valid_directions = ['A', 'ASC', 'ASCENDING', 'D', 'DESC', 'DESCENDING']
-    if flight_direction not in valid_directions:
-        print(f"Error: {flight_direction} is not a valid flight direction.")
-        print(f"Valid Directions: {valid_directions}")           
-        return False
-    else:
-        return True
 
-                        
-def product_filter(product_list: list, flight_direction: str = None, path: int = None) -> list:
-    """
-    Takes a list of products info dictionaries, string flight_direction(optional) and int path(optional)
-    Returns a list of products info dictionaries filtered by flight_direction and/or path
-    """
-    assert type(product_list) == list, 'Error: product_list must be a list of product_info dictionaries.'
-    assert len(product_list) > 0, 'Error: product_list must contain at least one product_info dictionary.'
-    for info_dict in product_list:
-        assert type(info_dict) == dict, 'Error: product_list must be a list of product info dictionaries.'
-    if flight_direction:
-        assert type(flight_direction) == str, 'Error: flight_direction must be a string.'
-    if path:
-        assert type(path) == int, 'Error: path must be an integer.'
-                    
-    if flight_direction or path:
-        filtered_products = []                        
-        for product in product_list:                 
-            granule_name = product['name']
-            granule_name = granule_name.split('-')[0]
-            vertex_API_URL = "https://api.daac.asf.alaska.edu/services/search/param"
-            parameters = [('granule_list', granule_name), ('output', 'json')]
-            if flight_direction:
-                parameters.append(('flightDirection', flight_direction))
-            if path:
-                parameters.append(('relativeOrbit', path))
-            try:
-                response = requests.post(
-                    vertex_API_URL,
-                    params=parameters,
-                    stream=True
-                )
-            except requests.exceptions.RequestException as e:
-                print(e)
-                sys.exit(1)               
-            json_response = None
-            if response.json()[0]:
-                json_response = response.json()[0][0]
-            if json_response:           
-                filtered_products.append(product)  
-        return filtered_products  
+            
+            
+def select_parameter(name: str, things: set):
+    return widgets.RadioButtons(
+        options=things,
+        description=name,
+        disabled=False
+    )
 
+            
+def select_mult_parameters(name: str, things: set):
+    height = len(things) * 19
+    return widgets.SelectMultiple(
+        options=things,
+        description=name,
+        disabled=False,
+        layout=widgets.Layout(height=f"{height}px", width='175px')
+    )                      
+
+            
+def get_wget_cmd(url: str): 
+                netrc = "/home/jovyan/.netrc"
+                f = open(netrc, 'r')
+                contents = f.read()
+                username = contents.split(' ')[3]
+                password = contents.split(' ')[5].split('\n')[0]
+                cmd = f"wget -c -q --show-progress --http-user={username} --http-password={password} {url}"
+                return cmd          
+            
 
 def download_hyp3_products(hyp3_api_object: API, 
-                           destination_path: str, 
-                           start_date: datetime.date = None, 
-                           end_date: datetime.date = None, 
-                           flight_direction: str = None, 
-                           path: int = None) -> int:
-    """
+                           destination_path: str,
+                           download_urls: list,
+                           subscription_id: int):
+    '''
     Takes a Hyp3 API object and a destination path.
     Calls pick_hyp3_subscription() and downloads all products associated with the selected subscription. 
     Returns subscription id.
     preconditions: -must already be logged into hyp3
                    -destination_path must be valid
-    """
+    '''
     assert type(hyp3_api_object) == API, 'Error: hyp3_api_object must be an asf_hyp3.API object.'
     assert type(destination_path) == str, 'Error: destination_path must be a string'
-    assert os.path.exists(destination_path), 'Error: desitination_path must be valid'
-    if start_date:
-        assert type(start_date) == datetime.date, 'Error: start_date must be a datetime.date'
-    if end_date:
-        assert type(end_date) == datetime.date, 'Error:, end_date must be a datetime.date'
-    if flight_direction:
-        assert type(flight_direction) == str, 'Error: flight_direction must be a string.'
-    if path:
-        assert type(path) == int, 'Error: path must be an integer.'
-                    
-    subscriptions = get_hyp3_subscriptions(hyp3_api_object)
-    subscription_id = pick_hyp3_subscription(subscriptions)
-    if subscription_id:
-        products = []
-        page_count = 0
-        product_count = 1
-        while True:
-            product_page = hyp3_api_object.get_products(
-                sub_id=subscription_id, page=page_count, page_size=100)
-            page_count += 1
-            if not product_page:
-                break
-            for product in product_page:
-                products.append(product)
-        if date_range_valid(start_date, end_date): 
-            products = filter_date_range(products, start_date, end_date)
-        if flight_direction: # must check this because both None and incorrect flight_directions 
-                             # will return False and it shouldn't exit if flight_direction is None
-            if flight_direction_valid(flight_direction):
-                products = product_filter(products, flight_direction=flight_direction)
+    #assert os.path.exists(destination_path), 'Error: desitination_path must be valid'
+    product_count = 1
+    if path_exists(destination_path):
+        print(f"\nSubscription ID: {subscription_id}")
+        for url in download_urls:
+            print(f"\nProduct Number {product_count} of {len(download_urls)}:")
+            product_count += 1
+            product = url.split('/')[5]
+            filename = f"{destination_path}/{product}"
+            # if not already present, we need to download and unzip products
+            if not os.path.exists(filename.split('.zip')[0]):
+                print(
+                    f"\n{product} is not present.\nDownloading from {url}")
+                netrc = "/home/jovyan/.netrc"
+                f = open(netrc, 'r')
+                contents = f.read()
+                username = contents.split(' ')[3]
+                password = contents.split(' ')[5].split('\n')[0]
+                args = ['wget', '-c', '-q', '--show-progress', f"--http-user={username}", f"--http-password={password}", url]
+                call(args, stdout=PIPE) 
+                
+                print(f"\n")
+                asf_unzip(destination_path, product)
+                print(f"product: {product}")
+                try:
+                    os.remove(product)
+                except OSError:
+                    pass
+                print(f"\nDone.")
             else:
-                print('Aborting download_hyp3_products() due to invalid flight_direction.')
-                sys.exit(1)
-        if path:
-            products = product_filter(products, path=path) 
-        if path_exists(destination_path):
-            print(f"\n{len(products)} products are associated with the selected date range, flight direction, and path for Subscription ID: {subscription_id}")
-            for p in products:
-                print(f"\nProduct Number {product_count}:")
-                product_count += 1
-                url = p['url']
-                _match = re.match(
-                    r'https://hyp3-download.asf.alaska.edu/asf/data/(.*).zip', url)
-                product = _match.group(1)
-                filename = f"{destination_path}/{product}"
-                # if not already present, we need to download and unzip products
-                if not os.path.exists(filename):
-                    print(
-                        f"\n{product} is not present.\nDownloading from {url}")
-                    r = requests.get(url, stream=True)
-                    download(filename, r)
-                    print(f"\n")
-                    os.rename(filename, f"{filename}.zip")
-                    filename = f"{filename}.zip"
-                    asf_unzip(destination_path, filename)
-                    os.remove(filename)
-                    print(f"\nDone.")
-                else:
-                    print(f"{filename} already exists.")
-        return subscription_id
-            
-            
+                print(f"{filename} already exists.")            
+        
 ########################################
 #  Bokeh related Functions and Classes #
 ########################################
@@ -719,7 +723,7 @@ class AOI:
     
     
     def build_plot(self, doc):
-        tile_provider = get_provider(Vendors.STAMEN_TERRAIN)
+        tile_provider = get_provider('STAMEN_TERRAIN')
         box_select = BoxSelectTool(callback=self.callbacks['subset'])
             
         self.p = figure(title="Use The Square Selection Tool To Select An Area Of Interest",
@@ -746,7 +750,7 @@ class AOI:
                 x=self.callbacks['longitude'])
         ))
 
-        self.p.add_tile(STAMEN_TERRAIN)
+        self.p.add_tile(tile_provider)
 
         x1 = self.tiff_stack_coords[0][0]
         x2 = self.tiff_stack_coords[1][0]
