@@ -5,7 +5,6 @@
 
 
 import os  # for chdir, getcwd, path.exists
-import wget
 import re
 import time  # for perf_counter
 import requests  # for post, get
@@ -24,6 +23,7 @@ import pandas as pd
 from IPython.utils.text import SList
 from IPython.display import clear_output
 import ipywidgets as widgets
+from ipywidgets import Layout
 
 from asf_hyp3 import API, LoginError  # for get_products, get_subscriptions, login
 
@@ -496,9 +496,11 @@ def select_parameter(name: str, things: set):
     return widgets.RadioButtons(
         options=things,
         description=name,
-        disabled=False
+        disabled=False,
+        layout=Layout(min_width='800px')
     )
 
+ 
             
 def select_mult_parameters(name: str, things: set):
     height = len(things) * 19
@@ -508,7 +510,6 @@ def select_mult_parameters(name: str, things: set):
         disabled=False,
         layout=widgets.Layout(height=f"{height}px", width='175px')
     )                      
-
             
 def get_wget_cmd(url: str): 
                 netrc = "/home/jovyan/.netrc"
