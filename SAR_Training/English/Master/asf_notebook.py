@@ -69,38 +69,7 @@ def new_directory(path: str):
         print(f"Created: {path}")
     if not os.path.exists(path):
         print(f"Failed to create path!")
-
-"""
-
-def download(filename: str, request: requests.models.Response):
-    '''
-    Takes a filename and get or post request, then downloads the file
-    while outputting a download status bar.
-    Preconditions: filename must be valid
-    '''
-    assert type(filename) == str, 'Error: filename must be a string'
-    assert type(request) == requests.models.Response, 'Error: request must be a class<requests.models.Response>'
-    
-    with open(filename, 'wb') as f:
-        start = time.perf_counter()
-        if request is None:
-            f.write(request.content)
-        else:
-            print(request.headers)
-            total_length = int(request.headers.get('content-length'))
-            dl = 0
-            for chunk in request.iter_content(chunk_size=1024*1024):
-                dl += len(chunk)
-                if chunk:
-                    f.write(chunk)
-                    f.flush()
-                    done = int(50 * dl / int(total_length))
-                    stars = '=' * done
-                    spaces = ' ' * (50-done)
-                    bps = dl//(time.perf_counter() - start)
-                    percent = int((100*dl)/total_length)
-                    print(f"\r[{stars}{spaces}] {bps} bps, {percent}%    ", end='\r', flush=True)
-"""                
+        
 
 def asf_unzip(output_dir: str, file_path: str):
     """
@@ -142,7 +111,29 @@ def remove_nan_filled_tifs(tif_dir: str, file_names: SList):
                 removed += 1
     print(f"GeoTiffs Examined: {len(file_names)}")
     print(f"GeoTiffs Removed:  {removed}")
+    
+    
+def input_path():        
+    print(f"Current working directory: {os.getcwd()}") 
+    print(f"\nPlease enter the name of a new subdirectory in which to store your data stack.")
+    return input()
 
+
+def handle_old_data(data_dir, contents):
+    print(f"\n********************** WARNING! **********************")
+    print(f"The subdirectory {data_dir} already exists and contains:")
+    for item in contents:
+        print(f"• {item.split('/')[-1]}")
+    print(f"\n\n[1] Delete old data and continue.")
+    print(f"[2] Save old data and pick a different subdirectory name.")
+    while True:
+        try:
+            selection = int(input("Select option 1 or 2.\n"))
+        except ValueError:
+             continue
+        if selection < 1 or selection > 2:
+             continue
+        return selection
 
         
 ########################
@@ -224,45 +215,6 @@ def get_vertex_granule_info(granule_name: str, processing_level: int) -> dict:
         else:
             print("get_vertex_granule_info() failed.\ngranule/processing level mismatch.")
         
-
-
-def download_ASF_granule(granule_name: str, processing_level: str) -> str:
-    """
-    Takes a string granule name and string processing level, then downloads the associated granule 
-    and returns its file name.<br><br>
-    preconditions:
-    Requires AWS Vertex API authentification (already logged in).
-    Requires a valid granule name.
-    Granule and processing level must match.
-    """
-    assert type(granule_name) == str, 'Error: granule_name must be a string.'
-    assert type(processing_level) == str, 'Error: processing_level must be a string.'
-
-    vertex_info = get_vertex_granule_info(granule_name, processing_level)
-    url = vertex_info["downloadUrl"]
-    local_filename = vertex_info["fileName"]
-    try:
-        r = requests.post(url, stream=True)
-    except requests.exceptions.RequestException as e:
-        print(e)
-        sys.exit(1)
-    else:
-        total_length = int(r.headers.get('content-length'))
-        if os.path.exists(local_filename):
-            if os.stat(local_filename).st_size == total_length:
-                print(
-                    f"{local_filename} is already present in current working directory.")
-                return local_filename
-        print(f"Downloading {url}")
-        download(local_filename, r)
-        if os.stat(local_filename).st_size < total_length:
-            print('\nDownload failed!\n')
-            return
-        else:
-            print('\nDone\n')
-            return local_filename
-
-
 
 #######################
 #  Hyp3 API Functions #
@@ -452,25 +404,8 @@ def select_RTC_polarization(process_type: int, base_path: str) -> str:
     else:
         print(f"Error: found no available polarizations.")      
 
-'''                    
-def date_range_valid(start_date: datetime.date = None, end_date: datetime.date = None) -> bool:
-    """
-    Takes a start and end date. 
-    Returns True if start_date <= end_date, else prints an error message and returns False.
-    """
-    if start_date:
-        assert type(start_date) == datetime.date, 'Error: start_date must be a datetime.date'
-    if end_date:
-        assert type(end_date) == datetime.date, 'Error:, end_date must be a datetime.date'
+
             
-    if start_date is None or end_date is None:
-        return False
-    elif start_date > end_date:
-        print("Error: The start date must be prior to the end date.")
-    else:                
-        return True
-'''                                              
-                        
 def get_aquisition_date_from_product_name(product_info: dict) -> datetime.date:
     """
     Takes a json dict containing the product name under the key 'name'
@@ -520,51 +455,6 @@ def get_wget_cmd(url: str):
                 cmd = f"wget -c -q --show-progress --http-user={username} --http-password={password} {url}"
                 return cmd          
             
-
-def download_hyp3_products(hyp3_api_object: API, 
-                           destination_path: str,
-                           download_urls: list,
-                           subscription_id: int):
-    '''
-    Takes a Hyp3 API object and a destination path.
-    Calls pick_hyp3_subscription() and downloads all products associated with the selected subscription. 
-    Returns subscription id.
-    preconditions: -must already be logged into hyp3
-                   -destination_path must be valid
-    '''
-    assert type(hyp3_api_object) == API, 'Error: hyp3_api_object must be an asf_hyp3.API object.'
-    assert type(destination_path) == str, 'Error: destination_path must be a string'
-    #assert os.path.exists(destination_path), 'Error: desitination_path must be valid'
-    product_count = 1
-    if path_exists(destination_path):
-        print(f"\nSubscription ID: {subscription_id}")
-        for url in download_urls:
-            print(f"\nProduct Number {product_count} of {len(download_urls)}:")
-            product_count += 1
-            product = url.split('/')[5]
-            filename = f"{destination_path}/{product}"
-            # if not already present, we need to download and unzip products
-            if not os.path.exists(filename.split('.zip')[0]):
-                print(
-                    f"\n{product} is not present.\nDownloading from {url}")
-                netrc = "/home/jovyan/.netrc"
-                f = open(netrc, 'r')
-                contents = f.read()
-                username = contents.split(' ')[3]
-                password = contents.split(' ')[5].split('\n')[0]
-                args = ['wget', '-c', '-q', '--show-progress', f"--http-user={username}", f"--http-password={password}", url]
-                call(args, stdout=PIPE) 
-                
-                print(f"\n")
-                asf_unzip(destination_path, product)
-                print(f"product: {product}")
-                try:
-                    os.remove(product)
-                except OSError:
-                    pass
-                print(f"\nDone.")
-            else:
-                print(f"{filename} already exists.")            
         
 ########################################
 #  Bokeh related Functions and Classes #
