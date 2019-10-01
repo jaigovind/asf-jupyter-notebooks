@@ -4,6 +4,7 @@
 # Module of Alaska Satellite Facility OpenSARLab Jupyter Notebook helper functions 
 
 
+import math
 import os  # for chdir, getcwd, path.exists
 import re
 import time  # for perf_counter
@@ -89,6 +90,31 @@ def asf_unzip(output_dir: str, file_path: str):
             except zipfile.BadZipFile:
                 print(f"Zipfile Error.")
             return
+
+        
+def get_power_set(my_set,set_size): 
+    p_set = set()
+    # set_size of power set of a set 
+    # with set_size n is (2**n -1) 
+    pow_set_size = (int) (math.pow(2, set_size)); 
+    counter = 0; 
+    j = 0; 
+    # Run from counter 000..0 to 111..1 
+    for counter in range(0, pow_set_size):
+        temp = ""
+        for j in range(0, set_size): 
+              
+            # Check if jth bit in the  
+            # counter is set If set then  
+            # print jth element from set 
+            if((counter & (1 << j)) > 0):
+                if temp != "":
+                    temp = f"{temp} and {my_set[j]}"
+                else:
+                    temp = my_set[j]
+            if temp != "":
+                p_set.add(temp)
+    return p_set        
         
     
 def remove_nan_filled_tifs(tif_dir: str, file_names: SList):
@@ -358,13 +384,12 @@ def polarization_exists(paths: str):
     else:
         return False                             
             
-                    
-def select_RTC_polarization(process_type: int, base_path: str) -> str:
+                              
+
+def get_RTC_polarizations(process_type: int, base_path: str) -> str:
     """
     Takes an int process type and a string path to a base directory
-    If files in multiple polarizations found, promts user for a choice.
-    Returns string wildcard path to files of selected (or only available)
-    polarization
+    Returns a list of present polarizations
     """
     assert process_type == 2 or process_type == 18, 'Error: process_type must be 2 (GAMMA) or 18 (S1TBX).'
     assert type(base_path) == str, 'Error: base_path must be a string.'
@@ -376,35 +401,18 @@ def select_RTC_polarization(process_type: int, base_path: str) -> str:
     elif process_type == 18: # S1TBX
         separator = '-'                
     if polarization_exists(f"{base_path}/*/*{separator}VV.tif"):
-        polarizations.append(f"{separator}VV")
+        polarizations.append('VV')
     if polarization_exists(f"{base_path}/*/*{separator}VH.tif"):
-        polarizations.append(f"{separator}VH")
+        polarizations.append('VH')
     if polarization_exists(f"{base_path}/*/*{separator}HV.tif"):
-        polarizations.append(f"{separator}HV")
+        polarizations.append('HV')
     if polarization_exists(f"{base_path}/*/*{separator}HH.tif"):
-        polarizations.append(f"{separator}HH")  
-    if len(polarizations) == 1:
-        print(f"Selecting the only available polarization: {polarizations[0]}")
-        return f"{base_path}/*/*{polarizations[0]}.tif"
-    elif len(polarizations) > 1:
-        print(f"Select a polarization:")
-        for i in range(0, len(polarizations)):
-            print(f"[{i}]: {polarizations[i]}")
-        while True:
-            user_input = input()
-            try:
-                choice = int(user_input)
-            except ValueError:
-                print(f"Please enter the number of an available polarization.")
-                continue
-            if choice > len(polarizations) or choice < 0:
-                print(f"Please enter the number of an available polarization.")
-                continue               
-            return f"{base_path}/*/*{polarizations[choice]}.tif"
+        polarizations.append('HH')  
+    if len(polarizations) > 1:
+        return polarizations
     else:
-        print(f"Error: found no available polarizations.")      
-
-
+        print(f"Error: found no available polarizations.")        
+    
             
 def get_aquisition_date_from_product_name(product_info: dict) -> datetime.date:
     """
