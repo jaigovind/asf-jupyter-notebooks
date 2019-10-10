@@ -92,8 +92,16 @@ def asf_unzip(output_dir: str, file_path: str):
             return
 
         
-def get_power_set(my_set,set_size): 
+def get_power_set(my_set: list) -> set: 
+    """
+    Adapted from printPowerSet https://www.geeksforgeeks.org/power-set/
+    
+    Takes a list of values.
+    Converts the list to a set and returns its power set as a set of strings.
+    The items in each subset are delineated with ' and '
+    """
     p_set = set()
+    set_size = len(list(set(my_set)))
     # set_size of power set of a set 
     # with set_size n is (2**n -1) 
     pow_set_size = (int) (math.pow(2, set_size)); 
@@ -295,6 +303,10 @@ def pick_hyp3_subscription(subscriptions: list) -> int:
             print("\nInvalid ID")
 
 def get_subscription_products_info(subscription_id: int, api_object: API) -> list:
+    """
+    Takes a subscription id and EarthData login API object.
+    Returns a list of json dictionaries containing product metadata.
+    """
     products = []
     page_count = 0
     while True:
@@ -308,6 +320,13 @@ def get_subscription_products_info(subscription_id: int, api_object: API) -> lis
     return products        
  
 def get_product_info(products_info: list, date_range: list) -> dict:
+    """
+    Takes a list of product info json dictionaries 
+    and a list containing a start and end date in datetime.date format
+    
+    Returns a dictionary containing lists of paths, orbit directions, and urls
+    for products that fall inside the date range
+    """
     paths = []
     directions = []
     urls = []
@@ -336,12 +355,22 @@ def get_product_info(products_info: list, date_range: list) -> dict:
     return {'paths': paths, 'directions': directions, 'urls': urls}           
                         
 def get_products_dates(products_info: list) -> list:
+    """
+    Takes a list of json dictionaries containing product metadata.
+    
+    Returns a list of product aquisition dates.
+    """
     dates = []
     for info in products_info:
         dates.append(info['name'].split('_')[4].split('T')[0])
     return dates  
             
-def gui_date_picker(dates: list) -> widgets.SelectionRangeSlider:  
+def gui_date_picker(dates: list) -> widgets.SelectionRangeSlider:
+    """
+    Takes a list of dates.
+    
+    Returns a selection range slider containing the dates.
+    """
     start_date = datetime.strptime(min(dates), '%Y%m%d')
     end_date = datetime.strptime(max(dates), '%Y%m%d')
     date_range = pd.date_range(start_date, end_date, freq='D')
@@ -374,7 +403,8 @@ def polarization_exists(paths: str):
     """
     Takes a wildcard path to images with a particular polarization
     ie. "rtc_products/*/*_VV.tif"
-    returns true if any matching paths are found, else false
+    
+    Returns true if any matching paths are found, else false
     """
     assert type(paths) == str, 'Error: must pass string wildcard path of form "rtc_products/*/*_VV.tif"'
 
@@ -389,6 +419,7 @@ def polarization_exists(paths: str):
 def get_RTC_polarizations(process_type: int, base_path: str) -> str:
     """
     Takes an int process type and a string path to a base directory
+    
     Returns a list of present polarizations
     """
     assert process_type == 2 or process_type == 18, 'Error: process_type must be 2 (GAMMA) or 18 (S1TBX).'
@@ -417,7 +448,9 @@ def get_RTC_polarizations(process_type: int, base_path: str) -> str:
 def get_aquisition_date_from_product_name(product_info: dict) -> datetime.date:
     """
     Takes a json dict containing the product name under the key 'name'
-    Returns its aquisition date.                        
+    
+    Returns its aquisition date.       
+    
     Preconditions: product_info must be a dictionary containing product info, as returned from the
                    hyp3_API get_products() function.
     """
@@ -436,6 +469,12 @@ def get_aquisition_date_from_product_name(product_info: dict) -> datetime.date:
             
             
 def select_parameter(name: str, things: set):
+    """
+    Takes a radio button selector title and a set of string values for the selector.
+    
+    
+    Returns a radio button widget with the passed title and values.  
+    """
     return widgets.RadioButtons(
         options=things,
         description=name,
@@ -446,6 +485,12 @@ def select_parameter(name: str, things: set):
  
             
 def select_mult_parameters(name: str, things: set):
+    """
+    Takes a menu selector title and a list of string values for the menu.
+    
+    
+    Returns an ipython menu selector widget with the passed title and values
+    """
     height = len(things) * 19
     return widgets.SelectMultiple(
         options=things,
@@ -455,13 +500,18 @@ def select_mult_parameters(name: str, things: set):
     )                      
             
 def get_wget_cmd(url: str): 
-                netrc = "/home/jovyan/.netrc"
-                f = open(netrc, 'r')
-                contents = f.read()
-                username = contents.split(' ')[3]
-                password = contents.split(' ')[5].split('\n')[0]
-                cmd = f"wget -c -q --show-progress --http-user={username} --http-password={password} {url}"
-                return cmd          
+    """
+    Takes a string download url to an ASF product
+    
+    returns a string wget command to download the product with EarthData credentials included.
+    """
+    netrc = "/home/jovyan/.netrc"
+    f = open(netrc, 'r')
+    contents = f.read()
+    username = contents.split(' ')[3]
+    password = contents.split(' ')[5].split('\n')[0]
+    cmd = f"wget -c -q --show-progress --http-user={username} --http-password={password} {url}"
+    return cmd          
             
         
 ########################################
